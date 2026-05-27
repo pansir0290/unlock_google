@@ -33,4 +33,5 @@
 直接登录你的 VPS 终端（Root 权限），复制并执行以下单行命令：
 
 ```bash
-curl -sSL [https://raw.githubusercontent.com/pansir0290/unlock_google/main/unlock.sh](https://raw.githubusercontent.com/pansir0290/unlock_google/main/unlock.sh) | bash
+curl -sSL https://raw.githubusercontent.com/pansir0290/unlock_google/main/unlock.sh | bash
+
