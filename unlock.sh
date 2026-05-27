@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# 脚本名称: CF WARP + Xray (YouTube + Gemini) 双重分流一键脚本
+# 脚本名称: CF WARP + Xray (YouTube & Gemini) 双重分流一键脚本
 # 适用系统: Ubuntu / Debian (Root 用户)
 # ==========================================================
 
@@ -28,6 +28,8 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 echo -e "${YELLOW}[1/6] 正在优化系统 DNS 解析，规避商家解锁污染...${NC}"
+# 【修复点 1】强制解除可能存在的 +i 文件锁，确保可以写入
+chattr -i /etc/resolv.conf 2>/dev/null || true
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
 echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 echo -e "${GREEN}✓ 系统 DNS 已成功修改为 8.8.8.8 和 1.1.1.1${NC}"
@@ -43,7 +45,8 @@ echo -e "${GREEN}✓ WARP 客户端安装成功！${NC}"
 
 echo -e "${YELLOW}[3/6] 正在初始化并配置 WARP 代理模式...${NC}"
 sleep 2
-warp-cli registration new --accept-tos 2>/dev/null || true
+# 【修复点 2】使用 echo "y" 强制静默同意 Cloudflare 的服务条款
+echo "y" | warp-cli registration new 2>/dev/null || true
 warp-cli mode proxy
 warp-cli proxy port $PROXY_PORT
 warp-cli connect
@@ -93,7 +96,6 @@ warp_outbound = {
     }
 }
 
-# 同时集成了 YouTube 和 Gemini 核心系列的域名池
 combined_domains = [
     "geosite:youtube",
     "domain:googlevideo.com",
@@ -119,7 +121,6 @@ else:
     data['outbounds'] = [warp_outbound]
 
 if 'routing' in data and 'rules' in data['routing']:
-    # 移除可能存在的旧规则，直接把最新规则顶到最前面
     data['routing']['rules'] = [r for r in data['routing']['rules'] if r.get('outboundTag') != 'warp-out']
     data['routing']['rules'].insert(0, split_rule)
 else:
