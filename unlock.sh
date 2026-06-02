@@ -3,8 +3,8 @@
 # =================================================================
 # 脚本名称: unlock.sh (WARP + Xray 精准分流解锁 Google/YouTube)
 # 修复内容: 
-#   1. 第 4 步引入 PTY 伪终端注入技术，完美欺骗并绕过新版 WARP 的 TTY 自动化拦截
-#   2. 引入注册后置状态双重校验，确保百分之百闭环再进入下一步
+#   1. 基础依赖引入 expect 自动化交互引擎
+#   2. 第 4 步采用 expect 纯动态高仿真 PTY 投递技术，彻底粉碎新版 WARP 的反自动化拦截
 # =================================================================
 
 # 开启报错即退出机制
@@ -14,10 +14,10 @@ echo "========================================================"
 echo "🚀 开始执行 终极全兼容 WARP + Xray 自动化分流解锁脚本"
 echo "========================================================"
 
-# 1. 环境检查与基础依赖安装
+# 1. 环境检查与基础依赖安装（🎯 核心：注入 expect 引擎）
 echo "🔄 [1/7] 检查并安装系统必要基础依赖..."
 apt update -y
-apt install curl lsb-release python3 gpg bsdutils -y
+apt install curl lsb-release python3 gpg expect -y
 
 # 2. 安装 Cloudflare WARP 客户端
 if ! command -v warp-cli &> /dev/null; then
@@ -46,7 +46,7 @@ for i in {1..10}; do
     sleep 1
 done
 
-# 4. WARP 注册与服务条款接受 (🎯 核心攻坚：PTY 伪终端欺骗技术)
+# 4. WARP 注册与服务条款接受 (🎯 核心攻坚：用 expect 仿真键盘输入)
 echo "🔄 [4/7] 正在初始化 WARP 账户注册..."
 
 # 🔓 临时关闭报错即退出，开启探测盾牌
@@ -60,35 +60,38 @@ if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&
     echo "   ➔ 检测到账户先前已存在，自动跳过注册雷区。"
 fi
 
-# 探测 B: 如果未注册，采用 PTY 终端伪造技术强行注入 'y'
+# 探测 B: 如果未注册，利用 expect 强制喂送 'y'
 if [ $REG_SUCCESS -ne 1 ]; then
-    echo "   👉 检测到未注册设备。正在通过 PTY 伪终端技术绕过 Cloudflare 条款拦截..."
+    echo "   👉 检测到未注册设备。正在通过 expect 引擎全面托管 PTY 键盘流..."
     
-    # 利用 script 命令在后台分配一个伪终端(PTY)，完美欺骗 WARP 的 isatty 检查
-    if command -v script &> /dev/null; then
-        yes | script -q -c "warp-cli registration new" /dev/null
-    else
-        # 万一系统极其精简没有 script，采用传统轰炸备用
-        yes | warp-cli registration new >/dev/null 2>&1
-    fi
+    expect << 'EOF'
+    set timeout 15
+    spawn warp-cli registration new
+    expect {
+        "Accept Terms of Service" { send "y\r"; exp_continue }
+        "y/N"                     { send "y\r"; exp_continue }
+        "already exists"          { exit 0 }
+        eof
+    }
+EOF
     
-    # 注入后延迟 1 秒等待后台异步写入状态
-    sleep 1
+    # 注入后延迟 1.5 秒等待后台异步写入状态
+    sleep 1.5
 
     # 后置状态最终校验
     if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
         REG_SUCCESS=1
-        echo "   ➔ [PTY 注入成功] 已强制通过服务条款，WARP 账户注册成功！"
+        echo "   ➔ [expect 强配成功] 已强制通过服务条款，WARP 账户注册成功！"
     fi
 fi
 
 # 🔒 恢复报错即退出机制
 set -e
 
-# 如果注册彻底失败，打印底层报错
+# 如果注册还是失败，直接阻断
 if [ $REG_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: 所有已知的 WARP 注册及终端欺骗命令均失效！"
-    echo "💡 请尝试在当前终端手动执行一次: warp-cli registration new 看看能否手动过条款。"
+    echo "❌ 错误: 极罕见情况！expect 自动化引擎也未能击穿条款拦截。"
+    echo "💡 请您直接在当前终端手动运行一次：warp-cli registration new，手动敲击 y 同意，随后重新运行此脚本即可！"
     exit 1
 fi
 
@@ -233,7 +236,7 @@ echo "🔄 正在重新加载并重启 Xray 服务..."
 if systemctl restart xray; then
     echo "========================================================"
     echo "🎉 恭喜！全套自动化配置成功！"
-    echo "👉 PTY 欺骗大获全胜、语法已避坑、YouTube 已强制分流！"
+    echo "👉 expect 降维打击成功，全线绿灯通过，赶紧刷个油管试试！"
     echo "========================================================"
 else
     echo "❌ 警告: 规则已写入，但重启 Xray 失败，请检查服务状态。"
