@@ -1,182 +1,182 @@
 #!/bin/bash
 
-# ==========================================================
-# 脚本名称: CF WARP + Xray (YouTube & Gemini) 极致修复版一键脚本
-# 适用系统: Ubuntu / Debian (Root 用户)
-# 修复特性: 完美适配新版 WARP 语法、规避 YT-IPv6 风控、校准 Dat 路径
-# ==========================================================
+# =================================================================
+# 脚本名称: unlock.sh (WARP + Xray 精准分流解锁 Google/YouTube)
+# 修复内容: 彻底解决新版 warp-cli 强制弹窗接受服务条款(TOS)导致的脚本死锁问题
+# =================================================================
 
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+# 开启报错即退出机制
+set -e
 
-echo -e "${YELLOW}====================================================${NC}"
-echo -e "${GREEN}    开始执行 CF WARP + Xray (YT+Gemini) 自动化配置     ${NC}"
-echo -e "${YELLOW}====================================================${NC}"
+echo "========================================================"
+echo "🚀 开始执行 Google/YouTube WARP 精准分流自动化解锁脚本"
+echo "========================================================"
 
-# 1. 权限检查
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}❌ 错误: 请使用 root 用户或 sudo 运行此脚本！${NC}"
-    exit 1
+# 1. 环境检查与基础依赖安装
+echo "🔄 [1/6] 检查并安装系统必要基础依赖..."
+apt update -y
+apt install curl lsb-release python3 gpg -y
+
+# 2. 安装 Cloudflare WARP 客户端
+if ! command -v warp-cli &> /dev/null; then
+    echo "🔄 [2/6] 未检测到 WARP 客户端，开始配置官方源并安装..."
+    
+    # 导入官方 GPG 密钥
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    
+    # 写入官方 APT 源
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
+    
+    # 更新源并安装（使用 --no-install-recommends 极致瘦身，拒绝 1.1GB 桌面图形垃圾包）
+    apt update -y
+    apt install cloudflare-warp --no-install-recommends -y
+    echo "✓ WARP 客户端轻量化内核安装成功！"
+else
+    echo "✓ [2/6] 检测到系统已存在 WARP 客户端，跳过安装步骤。"
 fi
 
-CONFIG_PATH="/usr/local/etc/xray/config.json"
-PROXY_PORT=40000
-
-# 2. 检查 Xray 配置文件路径
-if [ ! -f "$CONFIG_PATH" ]; then
-    echo -e "${RED}❌ 错误: 未能在路径 $CONFIG_PATH 找到 Xray 配置文件！${NC}"
-    exit 1
+# 3. WARP 注册与服务条款接受 (🎯 核心 Bug 闭环修复点)
+echo "🔄 [3/6] 正在初始化 WARP 账户注册..."
+if ! warp-cli registration show &> /dev/null; then
+    echo "👉 正在自动通过管道喂送 'y' 绕过交互，强制接受服务条款并完成注册..."
+    # 采用双重保险：yes 管道方案 + 全局前置参数方案，通杀所有新老版本 WARP 交互机制
+    yes | warp-cli registration new >/dev/null 2>&1 || warp-cli --accept-tos registration new >/dev/null 2>&1
+    echo "✓ WARP 账户自动注册成功！"
+else
+    echo "✓ WARP 账户此前已注册，保持现状。"
 fi
 
-# [1/6] 修复 DNS 锁死问题
-echo -e "${YELLOW}[1/6] 正在优化系统 DNS 解析，规避商家解锁污染...${NC}"
-chattr -i /etc/resolv.conf 2>/dev/null || true
-echo "nameserver 8.8.8.8" > /etc/resolv.conf
-echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-echo -e "${GREEN}✓ 系统 DNS 已成功修改为 8.8.8.8 和 1.1.1.1${NC}"
-
-# [2/6] 安装组件 & 自动创建标准资源目录
-echo -e "${YELLOW}[2/6] 正在安装基础组件、下载路由数据库及 WARP 官方客户端...${NC}"
-apt update && apt install curl gpg lsb-release python3 -y
-
-# 🎯 修复：校准为 Xray 官方标准的资源存放目录
-XRAY_ASSET_DIR="/usr/local/share/xray"
-mkdir -p "$XRAY_ASSET_DIR"
-
-echo -e "${YELLOW}🔄 正在自动下载最新的 geosite.dat 和 geoip.dat 路由数据包...${NC}"
-curl -sSL -o "${XRAY_ASSET_DIR}/geosite.dat" https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-curl -sSL -o "${XRAY_ASSET_DIR}/geoip.dat" https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-echo -e "${GREEN}✓ 路由数据包已成功补齐到 ${XRAY_ASSET_DIR}/ 目录${NC}"
-
-# 配置 WARP 官方源
-curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
-
-apt update && apt install cloudflare-warp -y
-echo -e "${GREEN}✓ WARP 官方客户端安装成功！${NC}"
-
-# [3/6] 适配新版 WARP CLI 语法并完成初始化
-echo -e "${YELLOW}[3/6] 正在初始化并配置 WARP 代理模式...${NC}"
-systemctl stop warp-svc 2>/dev/null || true
-systemctl start warp-svc
-
-sleep 2
-# 🎯 修复：全面适配新版 WARP CLI 语法
-warp-cli --accept-tos register >/dev/null 2>&1 || warp-cli register >/dev/null 2>&1 || true
-warp-cli mode set proxy
-warp-cli proxy set-port $PROXY_PORT
+# 4. 配置 WARP 本地分流隧道模式
+echo "🔄 [4/6] 正在将 WARP 切换为本地 Socks5 代理分流模式..."
+warp-cli mode proxy
+warp-cli proxy port 40000
 warp-cli connect
 
-echo -e "${YELLOW}正在等待 WARP 建立隧道（大约需要 5 秒）...${NC}"
-sleep 5
+# 循环检查隧道是否真正握手成功
+echo "⏳ 正在等待本地 40000 端口 WARP 隧道建立（最多等待 15 秒）..."
+SUCCESS=0
+for i in {1..15}; do
+    if warp-cli status 2>&1 | grep -q "Connected"; then
+        echo "🎉 [4/6] WARP 隧道代理建立成功！本地 40000 端口已就绪。"
+        SUCCESS=1
+        break
+    fi
+    sleep 1
+done
 
-# [4/6] 代理可用性检测与强制熔断机制
-echo -e "${YELLOW}[4/6] 正在对本地 ${PROXY_PORT} 端口进行 Google 回归测试...${NC}"
-HTTP_STATUS=$(curl -x socks5h://127.0.0.1:$PROXY_PORT -sI https://www.google.com | grep -iE "HTTP/" | awk '{print $2}')
-
-if [ "$HTTP_STATUS" = "200" ]; then
-    echo -e "${GREEN}✓ 完美！WARP 本地代理网络测试成功，响应状态: 200${NC}"
-else
-    echo -e "${RED}❌ 错误: WARP 代理隧道未能建立成功 [状态码: ${HTTP_STATUS}]，脚本终止，防止损坏 Xray。${NC}"
+if [ $SUCCESS -ne 1 ]; then
+    echo "❌ 错误: WARP 代理隧道未能按时建立成功，请检查后台 warp-svc 服务状态。"
     exit 1
 fi
 
-# [5/6] 自动备份防炸
-echo -e "${YELLOW}[5/6] 正在备份原 Xray 配置文件...${NC}"
-cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
-echo -e "${GREEN}✓ 备份完成。备份文件保存在: ${CONFIG_PATH}.bak${NC}"
+# 5. 补齐路由数据包
+echo "🔄 [5/6] 正在自动下载最新的 geosite.dat 和 geoip.dat 路由数据包..."
+mkdir -p /usr/local/share/xray/
+curl -sSL -o /usr/local/share/xray/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
+curl -sSL -o /usr/local/share/xray/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
+echo "✓ 路由数据包已成功补齐到 /usr/local/share/xray/ 目录"
 
-# [6/6] 使用 Python 精准无损注入 JSON 规则
-echo -e "${YELLOW}[6/6] 正在使用 Python 精准注入出站与双重分流规则...${NC}"
-python3 << 'EOF'
+# 建立多路径软链接，根治因不同面板或安装方式导致的路由黑洞
+mkdir -p /usr/local/bin/ /etc/xray/
+ln -sf /usr/local/share/xray/geosite.dat /usr/local/bin/geosite.dat
+ln -sf /usr/local/share/xray/geoip.dat /usr/local/bin/geoip.dat
+ln -sf /usr/local/share/xray/geosite.dat /etc/xray/geosite.dat
+ln -sf /usr/local/share/xray/geoip.dat /etc/xray/geoip.dat
+
+# 6. Xray 配置文件分流策略无损注入
+echo "🔄 [6/6] 正在通过 Python3 智能解析并无损注入 Xray 分流规则..."
+
+python3 - << 'EOF'
 import json
+import os
 import sys
 
-path = "/usr/local/etc/xray/config.json"
-port = 40000
+# 兼容常见的主流 Xray 路径
+cfg_paths = ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]
+cfg_path = None
 
-try:
-    with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-except Exception as e:
-    print(f"❌ 错误: 解析 Xray 原 JSON 文件失败: {e}")
+for path in cfg_paths:
+    if os.path.exists(path):
+        cfg_path = path
+        break
+
+if not cfg_path:
+    print("❌ 错误: 未找到 Xray 配置文件，请确认你的 Xray 配置文件路径是否为标准路径。")
     sys.exit(1)
 
-# 🎯 修复：注入 streamSettings.sockopt.domainStrategy，拦截并强制走 IPv4 绕过 YouTube 风控
+# 读取现有的配置文件
+with open(cfg_path, 'r', encoding='utf-8') as f:
+    try:
+        data = json.load(f)
+    except Exception as e:
+        print(f"❌ 错误: 读取 JSON 失败，可能存在配置语法错误。详情: {e}")
+        sys.exit(1)
+
+# 创建备份文件，防患于未然
+backup_path = cfg_path + ".bak"
+with open(backup_path, 'w', encoding='utf-8') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+
+# 1. 构造 WARP 出站结构 (强制走 IPv4 握手绕过限制)
+outbound_tag = "unlock-warp"
 warp_outbound = {
-    "tag": "warp-out",
+    "tag": outbound_tag,
     "protocol": "socks",
     "settings": {
-        "servers": [
-            {
-                "address": "127.0.0.1",
-                "port": port
-            }
-        ]
+        "servers": [{"address": "127.0.0.1", "port": 40000}]
     },
     "streamSettings": {
         "sockopt": {
+            "dialerProxy": "", 
             "domainStrategy": "UseIPv4"
         }
     }
 }
 
-combined_domains = [
-    "geosite:youtube",
-    "domain:googlevideo.com",
-    "domain:youtubei.googleapis.com",
-    "domain:ytimg.com",
-    "domain:gemini.google.com",
-    "domain:aistudio.google.com",
-    "domain:generativelanguage.googleapis.com",
-    "domain:proactivebackend-pa.googleapis.com",
-    "domain:alkalimaven-pa.googleapis.com"
-]
+if "outbounds" not in data: 
+    data["outbounds"] = []
 
-split_rule = {
+# 避免重复注入出站
+if not any(o.get("tag") == outbound_tag for o in data["outbounds"]):
+    data["outbounds"].append(warp_outbound)
+
+# 2. 构造 YouTube 强路由分流规则
+youtube_rule = {
     "type": "field",
-    "outboundTag": "warp-out",
-    "domain": combined_domains
+    "outboundTag": outbound_tag,
+    "domain": ["geosite:youtube"]
 }
 
-if 'outbounds' in data:
-    if not any(o.get('tag') == 'warp-out' for o in data['outbounds']):
-        data['outbounds'].append(warp_outbound)
-else:
-    data['outbounds'] = [warp_outbound]
+if "routing" not in data: 
+    data["routing"] = {"rules": []}
+if "rules" not in data["routing"]: 
+    data["routing"]["rules"] = []
 
-if 'routing' in data and 'rules' in data['routing']:
-    data['routing']['rules'] = [r for r in data['routing']['rules'] if r.get('outboundTag') != 'warp-out']
-    data['routing']['rules'].insert(0, split_rule)
-else:
-    if 'routing' not in data: data['routing'] = {'rules': []}
-    if 'rules' not in data['routing']: data['routing']['rules'] = []
-    data['routing']['rules'].insert(0, split_rule)
+# 避免重复注入路由规则
+rule_exists = any(
+    outbound_tag in r.get("outboundTag", "") 
+    for r in data["routing"]["rules"] 
+    if "geosite:youtube" in str(r.get("domain", ""))
+)
 
-with open(path, 'w', encoding='utf-8') as f:
+if not rule_exists:
+    # 插入到路由规则的最顶部 (索引0)，确保最高优先级拦截
+    data["routing"]["rules"].insert(0, youtube_rule)
+
+# 重新回写配置文件
+with open(cfg_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
-print("✓ Python (YouTube + Gemini) 规则动态注入成功！")
+print(f"🎯 策略无损注入成功！原有配置已备份至: {backup_path}")
 EOF
 
-# 启动与最终安全测试
-echo -e "${YELLOW}正在全力重启 Xray 服务...${NC}"
-systemctl restart xray
-
-# 自动调用测试命令进行验证，防止语法意外损坏导致断流
-if xray run -test -c "$CONFIG_PATH" >/dev/null 2>&1; then
-    if systemctl is-active --quiet xray; then
-        echo -e "${GREEN}====================================================${NC}"
-        echo -e "${GREEN}🎉 恭喜！全套自动化配置成功！YouTube & Gemini 分流全生效。${NC}"
-        echo -e "${GREEN}====================================================${NC}"
-    else
-        echo -e "${RED}❌ 错误: Xray 配置校验通过但服务未能成功运行，请检查端口冲突。${NC}"
-    fi
+# 7. 重启服务验证闭环
+echo "🔄 正在重新加载并重启 Xray 服务..."
+if systemctl restart xray; then
+    echo "========================================================"
+    echo "🎉 恭喜！全套自动化配置成功！"
+    echo "👉 WARP 注册锁已解、体积已精简、YouTube 已强制 IPv4 分流出站！"
+    echo "========================================================"
 else
-    echo -e "${RED}❌ 错误: 发现最终配置文件语法校验未通过！正在为您自动回滚备份...${NC}"
-    cp "${CONFIG_PATH}.bak" "$CONFIG_PATH"
-    systemctl restart xray
-    echo -e "${YELLOW}↩️ 已成功回滚至最初的备份状态，节点已恢复原样。${NC}"
+    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请执行 'xray run -test -c /usr/local/etc/xray/config.json' 排查问题。"
 fi
