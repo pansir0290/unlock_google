@@ -3,12 +3,11 @@
 # =================================================================
 # 脚本名称: unlock.sh (WARP + Xray 精准分流解锁 Google/YouTube)
 # 修复内容: 
-#   1. 解决新版 warp-cli 强制弹窗接受服务条款(TOS)导致的死锁
-#   2. 解决 --no-install-recommends 导致 daemon 守护进程未启动报错
-#   3. 全面兼容新/老/过渡版 warp-cli 变态的模式与端口配置语法
+#   1. 采用 set +e 动态探测机制，彻底根治多轨兼容触发 set -e 导致脚本静默猝死 Bug
+#   2. 失败时自动 fallback 打印官方 --help 帮助文档，拒绝任何调试盲区
 # =================================================================
 
-# 开启报错即退出机制
+# 开启报错即退出机制（全局通用安全防线）
 set -e
 
 echo "========================================================"
@@ -23,14 +22,8 @@ apt install curl lsb-release python3 gpg -y
 # 2. 安装 Cloudflare WARP 客户端
 if ! command -v warp-cli &> /dev/null; then
     echo "🔄 [2/7] 未检测到 WARP 客户端，开始配置官方源并安装..."
-    
-    # 导入官方 GPG 密钥
     curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-    
-    # 写入官方 APT 源
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
-    
-    # 更新源并安装（使用 --no-install-recommends 极致瘦身，拒绝桌面图形垃圾包）
     apt update -y
     apt install cloudflare-warp --no-install-recommends -y
     echo "✓ WARP 客户端轻量化内核安装成功！"
@@ -38,13 +31,12 @@ else
     echo "✓ [2/7] 检测到系统已存在 WARP 客户端，跳过安装步骤。"
 fi
 
-# 3. 强行激活并启动后台守护进程 (🎯 根治 Unable to connect to daemon 报错)
+# 3. 强行激活并启动后台守护进程
 echo "🔄 [3/7] 正在强制激活并启动 WARP 后台守护进程..."
 systemctl daemon-reload
 systemctl enable warp-svc --now
 systemctl start warp-svc || true
 
-# 循环检查，确保 daemon 彻底就绪再往下跑，防止 cli 找不到家
 echo "⏳ 正在等待 WARP 后台服务响应..."
 for i in {1..10}; do
     if warp-cli status 2>&1 | grep -q -v "Unable to connect"; then
@@ -64,14 +56,46 @@ else
     echo "✓ WARP 账户此前已注册，保持现状。"
 fi
 
-# 5. 配置 WARP 本地分流隧道模式 (🎯 针对新老版本语法多轨轰炸兼容)
+# 5. 配置 WARP 本地分流隧道模式 (🎯 核心安全探测闭环点)
 echo "🔄 [5/7] 正在将 WARP 切换为本地 Socks5 代理分流模式..."
 
-# 模式切换兼容：尝试新版语法、标准语法、历史语法
-warp-cli mode set proxy >/dev/null 2>&1 || warp-cli mode proxy >/dev/null 2>&1 || warp-cli set-mode proxy >/dev/null 2>&1
+# 🔓 关键动作：暂时关闭报错即退出，允许安全的进行多版本语法探测
+set +e
 
-# 端口锁定兼容：尝试锁定 40000 端口
-warp-cli proxy set-port 40000 >/dev/null 2>&1 || warp-cli proxy port 40000 >/dev/null 2>&1 || warp-cli set-proxy-port 40000 >/dev/null 2>&1
+MODE_SUCCESS=0
+if warp-cli mode set proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法A] 成功切换为 Proxy 模式";
+elif warp-cli mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法B] 成功切换为 Proxy 模式";
+elif warp-cli set-mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法C] 成功切换为 Proxy 模式";
+fi
+
+PORT_SUCCESS=0
+if warp-cli proxy set-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法A] 成功锁定 40000 端口";
+elif warp-cli proxy port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法B] 成功锁定 40000 端口";
+elif warp-cli set-proxy-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法C] 成功锁定 40000 端口";
+fi
+
+# 🔒 恢复报错即退出机制，保护后续流程
+set -e
+
+# 如果模式切换全部失败，打印调试信息并退出
+if [ $MODE_SUCCESS -ne 1 ]; then
+    echo "❌ 错误: 所有已知的 WARP 模式切换命令均失效！"
+    echo "💡 自动化调试：以下是您当前系统安装的 WARP 允许的模式语法，请看提示："
+    echo "--------------------------------------------------------"
+    warp-cli mode --help || warp-cli --help || true
+    echo "--------------------------------------------------------"
+    exit 1
+fi
+
+# 如果端口配置全部失败，打印调试信息并退出
+if [ $PORT_SUCCESS -ne 1 ]; then
+    echo "❌ 错误: 所有已知的 WARP 端口监听命令均失效！"
+    echo "💡 自动化调试：以下是您当前系统安装的 WARP 允许的代理端口语法："
+    echo "--------------------------------------------------------"
+    warp-cli proxy --help || true
+    echo "--------------------------------------------------------"
+    exit 1
+fi
 
 # 启动 WARP 连接
 warp-cli connect
@@ -113,7 +137,6 @@ import json
 import os
 import sys
 
-# 兼容常见的主流 Xray 路径
 cfg_paths = ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]
 cfg_path = None
 
@@ -123,23 +146,20 @@ for path in cfg_paths:
         break
 
 if not cfg_path:
-    print("❌ 错误: 未找到 Xray 配置文件，请确认你的 Xray 配置文件路径是否为标准路径。")
+    print("❌ 错误: 未找到 Xray 配置文件，请确认路径。")
     sys.exit(1)
 
-# 读取现有的配置文件
 with open(cfg_path, 'r', encoding='utf-8') as f:
     try:
         data = json.load(f)
     except Exception as e:
-        print(f"❌ 错误: 读取 JSON 失败，可能存在配置语法错误。详情: {e}")
+        print(f"❌ 错误: 读取 JSON 失败。详情: {e}")
         sys.exit(1)
 
-# 创建备份文件
 backup_path = cfg_path + ".bak"
 with open(backup_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
-# 1. 构造 WARP 出站结构 (强制走 IPv4 握手绕过限制)
 outbound_tag = "unlock-warp"
 warp_outbound = {
     "tag": outbound_tag,
@@ -161,7 +181,6 @@ if "outbounds" not in data:
 if not any(o.get("tag") == outbound_tag for o in data["outbounds"]):
     data["outbounds"].append(warp_outbound)
 
-# 2. 构造 YouTube 强路由分流规则
 youtube_rule = {
     "type": "field",
     "outboundTag": outbound_tag,
@@ -180,10 +199,8 @@ rule_exists = any(
 )
 
 if not rule_exists:
-    # 插入到路由规则的最顶部 (索引0)，确保最高优先级拦截
     data["routing"]["rules"].insert(0, youtube_rule)
 
-# 重新回写配置文件
 with open(cfg_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
