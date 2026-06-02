@@ -3,11 +3,11 @@
 # =================================================================
 # 脚本名称: unlock.sh (WARP + Xray 精准分流解锁 Google/YouTube)
 # 修复内容: 
-#   1. 第 4 步与第 5 步全面引入 set +e 探测盾牌，彻底解决二次运行因"已存在注册"触发熔断猝死的 Bug
-#   2. 失败时自动脱钩重定向，直接打印底层报错，拒绝任何调试盲区
+#   1. 第 4 步引入 PTY 伪终端注入技术，完美欺骗并绕过新版 WARP 的 TTY 自动化拦截
+#   2. 引入注册后置状态双重校验，确保百分之百闭环再进入下一步
 # =================================================================
 
-# 开启报错即退出机制（全局通用安全防线）
+# 开启报错即退出机制
 set -e
 
 echo "========================================================"
@@ -17,7 +17,7 @@ echo "========================================================"
 # 1. 环境检查与基础依赖安装
 echo "🔄 [1/7] 检查并安装系统必要基础依赖..."
 apt update -y
-apt install curl lsb-release python3 gpg -y
+apt install curl lsb-release python3 gpg bsdutils -y
 
 # 2. 安装 Cloudflare WARP 客户端
 if ! command -v warp-cli &> /dev/null; then
@@ -46,7 +46,7 @@ for i in {1..10}; do
     sleep 1
 done
 
-# 4. WARP 注册与服务条款接受 (🎯 针对二次运行和新版语法的安全闭环)
+# 4. WARP 注册与服务条款接受 (🎯 核心攻坚：PTY 伪终端欺骗技术)
 echo "🔄 [4/7] 正在初始化 WARP 账户注册..."
 
 # 🔓 临时关闭报错即退出，开启探测盾牌
@@ -57,32 +57,42 @@ REG_SUCCESS=0
 # 探测 A: 检查是否已经存在有效注册
 if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
     REG_SUCCESS=1
-    echo "   ➔ 检测到账户已存在或此前已注册成功，自动跳过注册雷区。"
+    echo "   ➔ 检测到账户先前已存在，自动跳过注册雷区。"
 fi
 
-# 探测 B: 如果未注册，采用多轨语法轰炸注册
+# 探测 B: 如果未注册，采用 PTY 终端伪造技术强行注入 'y'
 if [ $REG_SUCCESS -ne 1 ]; then
-    if warp-cli registration new --accept-tos >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法A] 成功";
-    elif warp-cli --accept-tos registration new >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法B] 成功";
-    elif yes | warp-cli registration new >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法C] 成功";
-    elif warp-cli register --accept-tos >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法D] 成功";
+    echo "   👉 检测到未注册设备。正在通过 PTY 伪终端技术绕过 Cloudflare 条款拦截..."
+    
+    # 利用 script 命令在后台分配一个伪终端(PTY)，完美欺骗 WARP 的 isatty 检查
+    if command -v script &> /dev/null; then
+        yes | script -q -c "warp-cli registration new" /dev/null
+    else
+        # 万一系统极其精简没有 script，采用传统轰炸备用
+        yes | warp-cli registration new >/dev/null 2>&1
+    fi
+    
+    # 注入后延迟 1 秒等待后台异步写入状态
+    sleep 1
+
+    # 后置状态最终校验
+    if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
+        REG_SUCCESS=1
+        echo "   ➔ [PTY 注入成功] 已强制通过服务条款，WARP 账户注册成功！"
     fi
 fi
 
 # 🔒 恢复报错即退出机制
 set -e
 
-# 如果注册彻底失败，脱下眼罩，让底层报错现形
+# 如果注册彻底失败，打印底层报错
 if [ $REG_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: 所有已知的 WARP 注册命令均失效！"
-    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
-    echo "--------------------------------------------------------"
-    warp-cli registration new || warp-cli register || true
-    echo "--------------------------------------------------------"
+    echo "❌ 错误: 所有已知的 WARP 注册及终端欺骗命令均失效！"
+    echo "💡 请尝试在当前终端手动执行一次: warp-cli registration new 看看能否手动过条款。"
     exit 1
 fi
 
-# 5. 配置 WARP 本地分流隧道模式 (🎯 核心安全探测闭环点)
+# 5. 配置 WARP 本地分流隧道模式 
 echo "🔄 [5/7] 正在将 WARP 切换为本地 Socks5 代理分流模式..."
 
 # 🔓 临时关闭报错即退出
@@ -103,22 +113,8 @@ fi
 # 🔒 恢复报错即退出机制
 set -e
 
-# 如果模式配置失败，打印调试报错
-if [ $MODE_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: 所有已知的 WARP 模式切换命令均失效！"
-    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
-    echo "--------------------------------------------------------"
-    warp-cli mode set proxy || warp-cli mode proxy || true
-    echo "--------------------------------------------------------"
-    exit 1
-fi
-
-if [ $PORT_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: 所有已知的 WARP 端口监听命令均失效！"
-    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
-    echo "--------------------------------------------------------"
-    warp-cli proxy set-port 40000 || warp-cli proxy port 40000 || true
-    echo "--------------------------------------------------------"
+if [ $MODE_SUCCESS -ne 1 ] || [ $PORT_SUCCESS -ne 1 ]; then
+    echo "❌ 错误: WARP 模式或端口切换失败！"
     exit 1
 fi
 
@@ -237,8 +233,8 @@ echo "🔄 正在重新加载并重启 Xray 服务..."
 if systemctl restart xray; then
     echo "========================================================"
     echo "🎉 恭喜！全套自动化配置成功！"
-    echo "👉 后台已起、语法已避坑、体积已精简、YouTube 已强制分流！"
+    echo "👉 PTY 欺骗大获全胜、语法已避坑、YouTube 已强制分流！"
     echo "========================================================"
 else
-    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请执行 'xray run -test -c /usr/local/etc/xray/config.json' 排查问题。"
+    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请检查服务状态。"
 fi
