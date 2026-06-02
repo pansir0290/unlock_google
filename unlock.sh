@@ -3,8 +3,8 @@
 # =================================================================
 # 脚本名称: unlock.sh (WARP + Xray 精准分流解锁 Google/YouTube)
 # 修复内容: 
-#   1. 采用 set +e 动态探测机制，彻底根治多轨兼容触发 set -e 导致脚本静默猝死 Bug
-#   2. 失败时自动 fallback 打印官方 --help 帮助文档，拒绝任何调试盲区
+#   1. 第 4 步与第 5 步全面引入 set +e 探测盾牌，彻底解决二次运行因"已存在注册"触发熔断猝死的 Bug
+#   2. 失败时自动脱钩重定向，直接打印底层报错，拒绝任何调试盲区
 # =================================================================
 
 # 开启报错即退出机制（全局通用安全防线）
@@ -46,53 +46,78 @@ for i in {1..10}; do
     sleep 1
 done
 
-# 4. WARP 注册与服务条款接受
+# 4. WARP 注册与服务条款接受 (🎯 针对二次运行和新版语法的安全闭环)
 echo "🔄 [4/7] 正在初始化 WARP 账户注册..."
-if ! warp-cli registration show &> /dev/null; then
-    echo "👉 正在自动通过管道喂送 'y' 绕过交互，强制接受服务条款并完成注册..."
-    yes | warp-cli registration new >/dev/null 2>&1 || warp-cli --accept-tos registration new >/dev/null 2>&1
-    echo "✓ WARP 账户自动注册成功！"
-else
-    echo "✓ WARP 账户此前已注册，保持现状。"
+
+# 🔓 临时关闭报错即退出，开启探测盾牌
+set +e
+
+REG_SUCCESS=0
+
+# 探测 A: 检查是否已经存在有效注册
+if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
+    REG_SUCCESS=1
+    echo "   ➔ 检测到账户已存在或此前已注册成功，自动跳过注册雷区。"
+fi
+
+# 探测 B: 如果未注册，采用多轨语法轰炸注册
+if [ $REG_SUCCESS -ne 1 ]; then
+    if warp-cli registration new --accept-tos >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法A] 成功";
+    elif warp-cli --accept-tos registration new >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法B] 成功";
+    elif yes | warp-cli registration new >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法C] 成功";
+    elif warp-cli register --accept-tos >/dev/null 2>&1; then REG_SUCCESS=1; echo "   ➔ [注册语法D] 成功";
+    fi
+fi
+
+# 🔒 恢复报错即退出机制
+set -e
+
+# 如果注册彻底失败，脱下眼罩，让底层报错现形
+if [ $REG_SUCCESS -ne 1 ]; then
+    echo "❌ 错误: 所有已知的 WARP 注册命令均失效！"
+    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
+    echo "--------------------------------------------------------"
+    warp-cli registration new || warp-cli register || true
+    echo "--------------------------------------------------------"
+    exit 1
 fi
 
 # 5. 配置 WARP 本地分流隧道模式 (🎯 核心安全探测闭环点)
 echo "🔄 [5/7] 正在将 WARP 切换为本地 Socks5 代理分流模式..."
 
-# 🔓 关键动作：暂时关闭报错即退出，允许安全的进行多版本语法探测
+# 🔓 临时关闭报错即退出
 set +e
 
 MODE_SUCCESS=0
-if warp-cli mode set proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法A] 成功切换为 Proxy 模式";
-elif warp-cli mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法B] 成功切换为 Proxy 模式";
-elif warp-cli set-mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [语法C] 成功切换为 Proxy 模式";
+if warp-cli mode set proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [模式语法A] 成功切换为 Proxy 模式";
+elif warp-cli mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [模式语法B] 成功切换为 Proxy 模式";
+elif warp-cli set-mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1; echo "   ➔ [模式语法C] 成功切换为 Proxy 模式";
 fi
 
 PORT_SUCCESS=0
-if warp-cli proxy set-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法A] 成功锁定 40000 端口";
-elif warp-cli proxy port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法B] 成功锁定 40000 端口";
-elif warp-cli set-proxy-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [语法C] 成功锁定 40000 端口";
+if warp-cli proxy set-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [端口语法A] 成功锁定 40000 端口";
+elif warp-cli proxy port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [端口语法B] 成功锁定 40000 端口";
+elif warp-cli set-proxy-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1; echo "   ➔ [端口语法C] 成功锁定 40000 端口";
 fi
 
-# 🔒 恢复报错即退出机制，保护后续流程
+# 🔒 恢复报错即退出机制
 set -e
 
-# 如果模式切换全部失败，打印调试信息并退出
+# 如果模式配置失败，打印调试报错
 if [ $MODE_SUCCESS -ne 1 ]; then
     echo "❌ 错误: 所有已知的 WARP 模式切换命令均失效！"
-    echo "💡 自动化调试：以下是您当前系统安装的 WARP 允许的模式语法，请看提示："
+    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
     echo "--------------------------------------------------------"
-    warp-cli mode --help || warp-cli --help || true
+    warp-cli mode set proxy || warp-cli mode proxy || true
     echo "--------------------------------------------------------"
     exit 1
 fi
 
-# 如果端口配置全部失败，打印调试信息并退出
 if [ $PORT_SUCCESS -ne 1 ]; then
     echo "❌ 错误: 所有已知的 WARP 端口监听命令均失效！"
-    echo "💡 自动化调试：以下是您当前系统安装的 WARP 允许的代理端口语法："
+    echo "💡 自动化调试：以下是您当前系统底层返回的真实错误信息："
     echo "--------------------------------------------------------"
-    warp-cli proxy --help || true
+    warp-cli proxy set-port 40000 || warp-cli proxy port 40000 || true
     echo "--------------------------------------------------------"
     exit 1
 fi
