@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================
-# WARP 自动化分流与 Xray 精准解锁脚本 (修复版)
+# WARP 自动化分流与 Xray 精准解锁脚本 (TTY 修复版)
 # =========================================================
 set -e
 
@@ -20,10 +20,10 @@ echo "📦 [1/4] 正在检查系统依赖与 Cloudflare WARP 客户端..."
 
 export DEBIAN_FRONTEND=noninteractive
 
-if ! command -v curl &> /dev/null || ! command -v gpg &> /dev/null || ! command -v python3 &> /dev/null; then
-    echo "📥 正在补全基础工具包 (curl, gnupg, lsb-release, python3)..."
+if ! command -v curl &> /dev/null || ! command -v gpg &> /dev/null || ! command -v python3 &> /dev/null || ! command -v script &> /dev/null; then
+    echo "📥 正在补全基础工具包 (curl, gnupg, lsb-release, python3, bsdutils)..."
     apt-get update -y
-    apt-get install -y curl gnupg lsb-release python3
+    apt-get install -y curl gnupg lsb-release python3 bsdutils
 fi
 
 if ! command -v warp-cli &> /dev/null; then
@@ -41,7 +41,7 @@ else
 fi
 
 # ---------------------------------------------------------
-# 2. 守护进程启动与 WARP 交互注册 (已修复 Expect 卡死)
+# 2. 守护进程启动与 WARP 交互注册 (已修复 TTY 协议校验)
 # ---------------------------------------------------------
 echo "🔄 [2/4] 正在启动 WARP 后台守护进程并执行账户注册..."
 
@@ -52,17 +52,19 @@ sleep 1
 if warp-cli status 2>&1 | grep -q "Connected"; then
     echo "✔ WARP 客户端已处于连接状态，无需重复注册。"
 else
-    # 尝试清除残余旧注册，防止弹出 Old registration is still around 阻止后续操作
+    # 尝试清除残余旧注册，防止弹出 Old registration is still around
     warp-cli registration delete >/dev/null 2>&1 || true
 
     echo "📝 正在自动接受 Cloudflare 服务条款并注册设备..."
-    # 彻底摒弃易卡死退出的 expect 脚本，使用管道回车强制送入 'y'
-    echo "y" | warp-cli registration new >/dev/null 2>&1 || {
-        yes | warp-cli registration new >/dev/null 2>&1 || true
-    }
+    # 借用 script 命令伪造 TTY 终端，完美通过 warp-cli 的交互协议拦截
+    script -q -c "warp-cli registration new" /dev/null <<EOF
+y
+EOF
 
     echo "⚙️ 正在切换 WARP 至 Socks5 代理模式..."
-    warp-cli mode proxy
+    script -q -c "warp-cli mode proxy" /dev/null <<EOF
+y
+EOF
     warp-cli proxy port ${socks_port} >/dev/null 2>&1 || true
 
     echo "🔌 正在建立 WARP 边缘网络连接..."
@@ -74,7 +76,7 @@ fi
 if warp-cli status 2>&1 | grep -E -q "Connected|Success"; then
     echo "✔ WARP 后台守护进程对接成功！Socks5 监听端口: ${socks_port}"
 else
-    echo "⚠️ 警告: WARP 状态未显式返回 Connected，继续执行 Xray 规则注入..."
+    echo "⚠️ 警告: WARP 状态未显式返回 Connected，请稍后手动运行 warp-cli status 检查。"
 fi
 
 # ---------------------------------------------------------
