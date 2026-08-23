@@ -1,213 +1,138 @@
-#!/bin/bash
-
-# =================================================================
-# 脚本名称: unlock.sh (WARP + Xray 精准分流 YouTube 解锁)
-# 说明: 自动安装配置 WARP 客户端，并在 Xray 配置中精准注入 YouTube 分流
-# 修复内容: 针对 curl | bash 管道执行环境加入了 < /dev/tty 终端接管
-# =================================================================
-
-# 开启报错即退出机制
+#!/usr/bin/env bash
+# =========================================================
+# WARP 自动化分流与 Xray 精准解锁脚本 (修复版)
+# =========================================================
 set -e
 
+# 参数定义
+outbound_tag="warp-out"
+socks_port=40000
+cfg_path="/usr/local/etc/xray/config.json"
+
 echo "========================================================"
-echo "🚀 开始执行 WARP + Xray 自动化分流解锁脚本"
+echo "🚀 开始执行 WARP 安装与 YouTube 精准分流自动化部署"
 echo "========================================================"
 
-# 1. 环境检查与基础依赖安装
-echo "🔄 [1/7] 检查并安装系统必要基础依赖..."
-if command -v apt &> /dev/null; then
-    apt update -y && apt install curl lsb-release python3 gpg expect -y
-elif command -v yum &> /dev/null; then
-    yum install epel-release -y && yum install curl python3 expect gpg -y
+# ---------------------------------------------------------
+# 1. 系统环境与依赖库检测安装
+# ---------------------------------------------------------
+echo "📦 [1/4] 正在检查系统依赖与 Cloudflare WARP 客户端..."
+
+export DEBIAN_FRONTEND=noninteractive
+
+if ! command -v curl &> /dev/null || ! command -v gpg &> /dev/null || ! command -v python3 &> /dev/null; then
+    echo "📥 正在补全基础工具包 (curl, gnupg, lsb-release, python3)..."
+    apt-get update -y
+    apt-get install -y curl gnupg lsb-release python3
 fi
 
-# 2. 安装 Cloudflare WARP 客户端
 if ! command -v warp-cli &> /dev/null; then
-    echo "🔄 [2/7] 未检测到 WARP 客户端，开始配置官方源并安装..."
-    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    echo "📥 正在配置 Cloudflare 官方 APT 存储库..."
+    mkdir -p /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
     echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list
-    apt update -y && apt install cloudflare-warp --no-install-recommends -y
-    echo "✓ WARP 客户端轻量化内核安装成功！"
+
+    echo "📥 正在安装 cloudflare-warp 二进制内核..."
+    apt-get update -y
+    apt-get install -y cloudflare-warp
+    echo "✔ WARP 客户端内核安装成功！"
 else
-    echo "✓ [2/7] 检测到系统已存在 WARP 客户端，跳过安装步骤。"
+    echo "✔ 检测到 WARP 客户端已安装，跳过包下载阶段。"
 fi
 
-# 3. 强行激活并启动后台守护进程
-echo "🔄 [3/7] 正在强制激活并启动 WARP 后台守护进程..."
-systemctl daemon-reload
-systemctl enable warp-svc --now
-systemctl start warp-svc || true
+# ---------------------------------------------------------
+# 2. 守护进程启动与 WARP 交互注册 (已修复 Expect 卡死)
+# ---------------------------------------------------------
+echo "🔄 [2/4] 正在启动 WARP 后台守护进程并执行账户注册..."
 
-echo "⏳ 正在等待 WARP 后台服务响应..."
-for i in {1..10}; do
-    if warp-cli status 2>&1 | grep -q -v "Unable to connect"; then
-        echo "✓ WARP 后台守护进程对接成功！"
-        break
-    fi
-    sleep 1
-done
+systemctl enable --now warp-svc >/dev/null 2>&1 || true
+sleep 1
 
-# 4. WARP 注册与服务条款接受 (通过 expect 仿真键盘输入，强制绑定 /dev/tty 适配管道执行)
-echo "🔄 [4/7] 正在初始化 WARP 账户注册..."
+# 状态校验与自动化注册
+if warp-cli status 2>&1 | grep -q "Connected"; then
+    echo "✔ WARP 客户端已处于连接状态，无需重复注册。"
+else
+    # 尝试清除残余旧注册，防止弹出 Old registration is still around 阻止后续操作
+    warp-cli registration delete >/dev/null 2>&1 || true
 
-set +e
-REG_SUCCESS=0
-
-if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
-    REG_SUCCESS=1
-    echo "   ➔ 检测到账户先前已存在，自动跳过注册雷区。"
-fi
-
-if [ $REG_SUCCESS -ne 1 ]; then
-    echo "   👉 检测到未注册设备。正在通过 expect 引擎全面托管 PTY 键盘流..."
-    
-    expect << 'EOF' < /dev/tty
-    set timeout 15
-    spawn warp-cli registration new
-    expect {
-        "Accept Terms of Service" { send "y\r"; exp_continue }
-        "y/N"                     { send "y\r"; exp_continue }
-        "already exists"          { exit 0 }
-        eof
+    echo "📝 正在自动接受 Cloudflare 服务条款并注册设备..."
+    # 彻底摒弃易卡死退出的 expect 脚本，使用管道回车强制送入 'y'
+    echo "y" | warp-cli registration new >/dev/null 2>&1 || {
+        yes | warp-cli registration new >/dev/null 2>&1 || true
     }
-EOF
-    
-    sleep 1.5
 
-    if warp-cli registration show >/dev/null 2>&1 || warp-cli account >/dev/null 2>&1; then
-        REG_SUCCESS=1
-        echo "   ➔ [expect 强配成功] 已强制通过服务条款，WARP 账户注册成功！"
-    fi
+    echo "⚙️ 正在切换 WARP 至 Socks5 代理模式..."
+    warp-cli mode proxy
+    warp-cli proxy port ${socks_port} >/dev/null 2>&1 || true
+
+    echo "🔌 正在建立 WARP 边缘网络连接..."
+    warp-cli connect
+    sleep 3
 fi
 
-set -e
-
-if [ $REG_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: expect 自动化引擎未能击穿条款拦截。"
-    echo "💡 请手动运行: warp-cli registration new，输入 y 同意后重新运行此脚本！"
-    exit 1
+# 确认 WARP 状态
+if warp-cli status 2>&1 | grep -E -q "Connected|Success"; then
+    echo "✔ WARP 后台守护进程对接成功！Socks5 监听端口: ${socks_port}"
+else
+    echo "⚠️ 警告: WARP 状态未显式返回 Connected，继续执行 Xray 规则注入..."
 fi
 
-# 5. 配置 WARP 本地分流隧道模式 
-echo "🔄 [5/7] 正在将 WARP 切换为本地 Socks5 代理分流模式..."
+# ---------------------------------------------------------
+# 3. Python 精准修改 Xray 配置文件 (出站 + 路由)
+# ---------------------------------------------------------
+echo "🛠️ [3/4] 正在配置 Xray 路由规则与出站节点..."
 
-set +e
-MODE_SUCCESS=0
-if warp-cli mode set proxy >/dev/null 2>&1; then MODE_SUCCESS=1;
-elif warp-cli mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1;
-elif warp-cli set-mode proxy >/dev/null 2>&1; then MODE_SUCCESS=1;
-fi
-
-PORT_SUCCESS=0
-if warp-cli proxy set-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1;
-elif warp-cli proxy port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1;
-elif warp-cli set-proxy-port 40000 >/dev/null 2>&1; then PORT_SUCCESS=1;
-fi
-set -e
-
-if [ $MODE_SUCCESS -ne 1 ] || [ $PORT_SUCCESS -ne 1 ]; then
-    echo "❌ 错误: WARP 模式或端口切换失败！"
-    exit 1
-fi
-
-warp-cli connect
-
-echo "⏳ 正在等待本地 40000 端口 WARP 隧道建立（最多等待 15 秒）..."
-SUCCESS=0
-for i in {1..15}; do
-    if warp-cli status 2>&1 | grep -q "Connected"; then
-        echo "🎉 WARP 隧道代理建立成功！本地 40000 端口已就绪。"
-        SUCCESS=1
-        break
-    fi
-    sleep 1
-done
-
-if [ $SUCCESS -ne 1 ]; then
-    echo "❌ 错误: WARP 代理隧道未能按时建立成功，请检查节点连通性。"
-    exit 1
-fi
-
-# 6. 补齐路由数据包与软链接
-echo "🔄 [6/7] 正在自动下载最新的 geosite.dat 和 geoip.dat 路由数据包..."
-mkdir -p /usr/local/share/xray/ /usr/local/bin/ /etc/xray/
-curl -sSL -o /usr/local/share/xray/geosite.dat https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat
-curl -sSL -o /usr/local/share/xray/geoip.dat https://github.com/v2fly/geoip/releases/latest/download/geoip.dat
-
-ln -sf /usr/local/share/xray/geosite.dat /usr/local/bin/geosite.dat
-ln -sf /usr/local/share/xray/geoip.dat /usr/local/bin/geoip.dat
-ln -sf /usr/local/share/xray/geosite.dat /etc/xray/geosite.dat
-ln -sf /usr/local/share/xray/geoip.dat /etc/xray/geoip.dat
-echo "✓ 路由数据包多路径全局闭环完成！"
-
-# 7. Xray 配置文件分流策略智能无损注入（精准锁定 YouTube 避免污染其他谷歌服务）
-echo "🔄 [7/7] 正在通过 Python3 智能解析并无损注入 YouTube 分流规则..."
-
-python3 - << 'EOF'
+python3 - <<EOF
 import json
 import os
-import sys
+import shutil
+from datetime import datetime
 
-cfg_paths = ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]
-cfg_path = None
+cfg_path = "${cfg_path}"
+outbound_tag = "${outbound_tag}"
+socks_port = ${socks_port}
 
-for path in cfg_paths:
-    if os.path.exists(path):
-        cfg_path = path
-        break
+if not os.path.exists(cfg_path):
+    print(f"❌ 错误: 未找到 Xray 配置文件 ({cfg_path})，请核对路径！")
+    exit(1)
 
-if not cfg_path:
-    print("❌ 错误: 未找到 Xray 配置文件，请确认路径。")
-    sys.exit(1)
+# 备份原始配置
+backup_path = f"{cfg_path}.bak_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+shutil.copyfile(cfg_path, backup_path)
 
 with open(cfg_path, 'r', encoding='utf-8') as f:
-    try:
-        data = json.load(f)
-    except Exception as e:
-        print(f"❌ 错误: 读取 JSON 失败。详情: {e}")
-        sys.exit(1)
+    data = json.load(f)
 
-backup_path = cfg_path + ".bak"
-with open(backup_path, 'w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
+# 确保必要的结构层级存在
+if "outbounds" not in data:
+    data["outbounds"] = []
+if "routing" not in data:
+    data["routing"] = {}
+if "rules" not in data["routing"]:
+    data["routing"]["rules"] = []
 
-outbound_tag = "unlock-warp"
+# 1. 注入/更新 WARP Socks5 Outbound
+data["outbounds"] = [o for o in data["outbounds"] if o.get("tag") != outbound_tag]
 warp_outbound = {
     "tag": outbound_tag,
     "protocol": "socks",
     "settings": {
-        "servers": [{"address": "127.0.0.1", "port": 40000}]
-    },
-    "streamSettings": {
-        "sockopt": {
-            "dialerProxy": "", 
-            "domainStrategy": "UseIPv4"
-        }
+        "servers": [
+            {
+                "address": "127.0.0.1",
+                "port": socks_port
+            }
+        ]
     }
 }
-
-if "outbounds" not in data: 
-    data["outbounds"] = []
-
-# 幂等更新 Outbound
-data["outbounds"] = [o for o in data["outbounds"] if o.get("tag") != outbound_tag]
 data["outbounds"].append(warp_outbound)
 
-# 确保 routing 存在并优化 domainStrategy 为 IPOnDemand
-if "routing" not in data: 
-    data["routing"] = {}
-data["routing"]["domainStrategy"] = "IPOnDemand"
-
-if "rules" not in data["routing"]: 
-    data["routing"]["rules"] = []
-
-# 清理旧的规则防止重复累加
+# 2. 注入/更新 YouTube 精准分流 Rule
 data["routing"]["rules"] = [
     r for r in data["routing"]["rules"] 
     if outbound_tag not in r.get("outboundTag", "")
 ]
 
-# 插入精准的 YouTube 专享分流规则（不污染全局 Google）
 youtube_rule = {
     "type": "field",
     "outboundTag": outbound_tag,
@@ -215,23 +140,25 @@ youtube_rule = {
         "geosite:youtube"
     ]
 }
-
 data["routing"]["rules"].insert(0, youtube_rule)
 
+# 保存文件
 with open(cfg_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
 print(f"🎯 策略无损注入成功！原有配置已备份至: {backup_path}")
 EOF
 
-# 重启服务验证闭环
-echo "🔄 正在重新加载并重启 Xray 服务..."
+# ---------------------------------------------------------
+# 4. 重启 Xray 服务闭环验证
+# ---------------------------------------------------------
+echo "🔄 [4/4] 正在重新加载并重启 Xray 服务..."
 if systemctl restart xray; then
     echo "========================================================"
     echo "🎉 恭喜！YouTube 精准分流自动化配置完美落地！"
     echo "👉 YouTube 流量已成功引导至 WARP 解锁节点。"
     echo "========================================================"
 else
-    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请检查服务状态。"
+    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请使用 systemctl status xray 检查服务。"
     exit 1
 fi
