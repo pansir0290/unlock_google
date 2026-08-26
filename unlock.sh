@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================
-# WARP 自动化分流与 Xray 精准解锁脚本 (下载链修复版)
+# WARP 自动化分流与 Xray 精准解锁脚本 (配置生成修复版)
 # =========================================================
 set -e
 
@@ -46,7 +46,7 @@ else
     endpoint_ip="162.159.192.1:2408"
 fi
 
-# 检查/下载 warp-go 执行二进制文件 (修复解压管道失败报错)
+# 检查/下载 warp-go 执行二进制文件
 if [ ! -f /usr/local/bin/warp-go ]; then
     echo "📥 下载 warp-go 自动化代理核心..."
     arch=$(uname -m)
@@ -56,7 +56,6 @@ if [ ! -f /usr/local/bin/warp-go ]; then
         *) echo "❌ 不支持的 CPU 架构: $arch"; exit 1 ;;
     esac
 
-    # 改用直链下载预编译好的二进制文件，避免 gzip/tar 管道格式异常
     curl -sSL -o /usr/local/bin/warp-go "https://gitlab.com/ProjectWARP/warp-go/-/raw/main/bin/warp-go_linux_${bin_arch}" || \
     curl -sSL -o /usr/local/bin/warp-go "https://github.com/pansir0290/unlock_google/releases/download/v1.0.0/warp-go_linux_${bin_arch}"
     
@@ -67,11 +66,21 @@ fi
 mkdir -p /etc/warp-go
 
 if [ ! -f /etc/warp-go/warp.conf ]; then
-    echo "📝 注册 WARP 账号并写入定向 Endpoint (${endpoint_ip})..."
+    echo "📝 预建 WARP 配置文件并定向至 Endpoint (${endpoint_ip})..."
+    cat <<EOF > /etc/warp-go/warp.conf
+[Client]
+PrivateKey = 
+DeviceID = 
+AccessToken = 
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+Endpoint = ${endpoint_ip}
+KeepAlive = 15
+EOF
+
+    echo "🔐 正在自动注册 WARP 账号并填充密钥..."
     /usr/local/bin/warp-go --register --config=/etc/warp-go/warp.conf >/dev/null 2>&1 || true
-    
-    # 替换其中的 Endpoint 字段为指定的日本/默认 IP
-    sed -i "s/Endpoint = .*/Endpoint = ${endpoint_ip}/g" /etc/warp-go/warp.conf
 fi
 
 # 创建 systemd 后台守护服务
@@ -100,7 +109,7 @@ warp_loc=$(curl --socks5 127.0.0.1:${socks_port} -s --max-time 5 https://www.clo
 echo "🎉 WARP 代理服务部署完成！当前 WARP 出口实际地区: [ ${warp_loc} ]"
 
 # ---------------------------------------------------------
-# 3. Python 修改 Xray 配置文件 (保持原有精准逻辑)
+# 3. Python 修改 Xray 配置文件 (维持原有精准逻辑)
 # ---------------------------------------------------------
 echo "🛠️ [3/4] 正在配置 Xray 路由规则与出站节点..."
 
