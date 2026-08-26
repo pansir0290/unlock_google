@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================
-# WARP 自动化分流与 Xray 精准解锁脚本 (香港自动切日本版)
+# WARP 自动化分流与 Xray 精准解锁脚本 (下载链修复版)
 # =========================================================
 set -e
 
@@ -25,8 +25,11 @@ if ! command -v curl &> /dev/null || ! command -v python3 &> /dev/null || ! comm
     apt-get install -y curl python3 wireguard-tools
 fi
 
-# 检测 VPS 本身所在国家/地区
-vps_loc=$(curl -s https://speed.cloudflare.com/meta | grep -oP '"country":\s*"\K[^"]+' || echo "UNKNOWN")
+# 检测 VPS 本身所在国家/地区 (支持多接口容错)
+vps_loc=$(curl -s --max-time 5 https://speed.cloudflare.com/meta | grep -oP '"country":\s*"\K[^"]+' || true)
+if [ -z "$vps_loc" ]; then
+    vps_loc=$(curl -s --max-time 5 https://ipinfo.io/country || echo "UNKNOWN")
+fi
 echo "🌍 检测到当前 VPS 归属地: ${vps_loc}"
 
 # ---------------------------------------------------------
@@ -37,14 +40,13 @@ echo "🔄 [2/4] 正在部署并启动 WARP 节点代理..."
 # 如果当前是香港机 (HK)，强制挑选日本 Cloudflare Endpoint
 if [ "$vps_loc" = "HK" ]; then
     echo "⚡ 检测到香港 VPS，正在配置定向连接【日本 (Japan)】Cloudflare 节点..."
-    # Cloudflare 日本东京 Endpoint 节点 IP
     endpoint_ip="162.159.193.5:2408"
 else
     echo "🌐 非香港 VPS，使用标准 Cloudflare 全球 Anycast 节点..."
     endpoint_ip="162.159.192.1:2408"
 fi
 
-# 检查 warp-go 执行文件
+# 检查/下载 warp-go 执行二进制文件 (修复解压管道失败报错)
 if [ ! -f /usr/local/bin/warp-go ]; then
     echo "📥 下载 warp-go 自动化代理核心..."
     arch=$(uname -m)
@@ -53,7 +55,11 @@ if [ ! -f /usr/local/bin/warp-go ]; then
         aarch64) bin_arch="arm64" ;;
         *) echo "❌ 不支持的 CPU 架构: $arch"; exit 1 ;;
     esac
-    curl -sSL "https://gitlab.com/ProjectWARP/warp-go/-/releases/permalink/latest/downloads/warp-go_linux_${bin_arch}.tar.gz" | tar -xz -C /usr/local/bin/ warp-go
+
+    # 改用直链下载预编译好的二进制文件，避免 gzip/tar 管道格式异常
+    curl -sSL -o /usr/local/bin/warp-go "https://gitlab.com/ProjectWARP/warp-go/-/raw/main/bin/warp-go_linux_${bin_arch}" || \
+    curl -sSL -o /usr/local/bin/warp-go "https://github.com/pansir0290/unlock_google/releases/download/v1.0.0/warp-go_linux_${bin_arch}"
+    
     chmod +x /usr/local/bin/warp-go
 fi
 
@@ -68,7 +74,7 @@ if [ ! -f /etc/warp-go/warp.conf ]; then
     sed -i "s/Endpoint = .*/Endpoint = ${endpoint_ip}/g" /etc/warp-go/warp.conf
 fi
 
-# 创建 systemd 后台守护服务 (将 WARP 转为 Socks5 监听 40000)
+# 创建 systemd 后台守护服务
 cat <<EOF > /etc/systemd/system/warp-go.service
 [Unit]
 Description=WARP-GO Socks5 Proxy
@@ -89,12 +95,12 @@ systemctl enable --now warp-go >/dev/null 2>&1 || systemctl restart warp-go
 
 sleep 3
 
-# 校验 Socks5 出口出口地区代码
-warp_loc=$(curl --socks5 127.0.0.1:${socks_port} -s https://www.cloudflare.com/cdn-cgi/trace | grep "loc=" | cut -d= -f2 || echo "FAIL")
+# 校验 Socks5 出口地区代码
+warp_loc=$(curl --socks5 127.0.0.1:${socks_port} -s --max-time 5 https://www.cloudflare.com/cdn-cgi/trace | grep "loc=" | cut -d= -f2 || echo "FAIL")
 echo "🎉 WARP 代理服务部署完成！当前 WARP 出口实际地区: [ ${warp_loc} ]"
 
 # ---------------------------------------------------------
-# 3. Python 修改 Xray 配置文件 (维持原有逻辑)
+# 3. Python 修改 Xray 配置文件 (保持原有精准逻辑)
 # ---------------------------------------------------------
 echo "🛠️ [3/4] 正在配置 Xray 路由规则与出站节点..."
 
