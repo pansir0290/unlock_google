@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================
-# WARP 自动化分流与 Xray 精准解锁脚本 (TTY 修复版)
+# WARP 自动化分流与 Xray 精准解锁脚本 (全域名增强版)
 # =========================================================
 set -e
 
@@ -41,7 +41,7 @@ else
 fi
 
 # ---------------------------------------------------------
-# 2. 守护进程启动与 WARP 交互注册 (已修复 TTY 协议校验)
+# 2. 守护进程启动与 WARP 交互注册 (TTY 伪造)
 # ---------------------------------------------------------
 echo "🔄 [2/4] 正在启动 WARP 后台守护进程并执行账户注册..."
 
@@ -80,7 +80,7 @@ else
 fi
 
 # ---------------------------------------------------------
-# 3. Python 精准修改 Xray 配置文件 (出站 + 路由)
+# 3. Python 修改 Xray 配置文件 (补充 YouTube 全套 API 域名)
 # ---------------------------------------------------------
 echo "🛠️ [3/4] 正在配置 Xray 路由规则与出站节点..."
 
@@ -129,7 +129,7 @@ warp_outbound = {
 }
 data["outbounds"].append(warp_outbound)
 
-# 2. 注入/更新 YouTube 精准分流 Rule
+# 2. 注入/更新 YouTube 精准分流 Rule (追加 Premium 定位与鉴权域名)
 data["routing"]["rules"] = [
     r for r in data["routing"]["rules"] 
     if outbound_tag not in r.get("outboundTag", "")
@@ -139,7 +139,14 @@ youtube_rule = {
     "type": "field",
     "outboundTag": outbound_tag,
     "domain": [
-        "geosite:youtube"
+        "geosite:youtube",
+        "domain:youtube.com",
+        "domain:googlevideo.com",
+        "domain:ytimg.com",
+        "domain:ggpht.com",
+        "domain:googleapis.com",
+        "domain:googleusercontent.com",
+        "domain:youtubei.googleapis.com"
     ]
 }
 data["routing"]["rules"].insert(0, youtube_rule)
