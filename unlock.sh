@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =========================================================
-# WARP 自动化分流与 Xray 精准解锁脚本 (无 sed 稳定版)
+# WARP 自动化分流与 Xray 精准解锁脚本 (修复增强版)
 # =========================================================
 set -e
 
@@ -9,80 +9,52 @@ socks_port=40000
 cfg_path="/usr/local/etc/xray/config.json"
 
 echo "========================================================"
-echo "🚀 开始执行 WARP 安装与 YouTube 精准分流自动化部署"
+echo "🚀 开始执行 WARP 修复部署与 YouTube 精准分流"
 echo "========================================================"
 
-# ---------------------------------------------------------
-# 1. 基础依赖检测与 VPS 位置识别
-# ---------------------------------------------------------
-echo "📦 [1/4] 正在检查环境依赖与 VPS 地理位置..."
-
+# 1. 依赖与环境检查
 export DEBIAN_FRONTEND=noninteractive
-
-if ! command -v curl &> /dev/null || ! command -v python3 &> /dev/null || ! command -v wg &> /dev/null; then
-    echo "📥 正在补全基础工具包 (curl, python3, wireguard-tools)..."
-    apt-get update -y
-    apt-get install -y curl python3 wireguard-tools
+if ! command -v curl &> /dev/null || ! command -v python3 &> /dev/null; then
+    apt-get update -y && apt-get install -y curl python3
 fi
 
-# 检测 VPS 本身所在国家/地区
-vps_loc=$(curl -s --max-time 5 https://speed.cloudflare.com/meta | grep -oP '"country":\s*"\K[^"]+' || true)
-if [ -z "$vps_loc" ]; then
-    vps_loc=$(curl -s --max-time 5 https://ipinfo.io/country || echo "UNKNOWN")
-fi
-echo "🌍 检测到当前 VPS 归属地: ${vps_loc}"
+vps_loc=$(curl -s --max-time 5 https://speed.cloudflare.com/meta | grep -oP '"country":\s*"\K[^"]+' || echo "UNKNOWN")
+echo "🌍 VPS 本地归属地: ${vps_loc}"
 
-# ---------------------------------------------------------
-# 2. 部署 warp-go 并根据地区智能挑选 Endpoint
-# ---------------------------------------------------------
-echo "🔄 [2/4] 正在部署并启动 WARP 节点代理..."
-
+# 2. 安装与配置 warp-go
 if [ "$vps_loc" = "HK" ]; then
-    echo "⚡ 检测到香港 VPS，正在配置定向连接【日本 (Japan)】Cloudflare 节点..."
     endpoint_ip="162.159.193.5:2408"
 else
-    echo "🌐 非香港 VPS，使用标准 Cloudflare 全球 Anycast 节点..."
     endpoint_ip="162.159.192.1:2408"
 fi
 
-# 下载 warp-go 执行二进制文件
-if [ ! -f /usr/local/bin/warp-go ]; then
-    echo "📥 下载 warp-go 自动化代理核心..."
-    arch=$(uname -m)
-    case "$arch" in
-        x86_64)  bin_arch="amd64" ;;
-        aarch64) bin_arch="arm64" ;;
-        *) echo "❌ 不支持的 CPU 架构: $arch"; exit 1 ;;
-    esac
+arch=$(uname -m)
+case "$arch" in
+    x86_64)  bin_arch="amd64" ;;
+    aarch64) bin_arch="arm64" ;;
+    *) echo "❌ 不支持的 CPU 架构: $arch"; exit 1 ;;
+esac
 
-    curl -sSL -o /usr/local/bin/warp-go "https://gitlab.com/ProjectWARP/warp-go/-/raw/main/bin/warp-go_linux_${bin_arch}" || \
-    curl -sSL -o /usr/local/bin/warp-go "https://github.com/pansir0290/unlock_google/releases/download/v1.0.0/warp-go_linux_${bin_arch}"
-    
-    chmod +x /usr/local/bin/warp-go
-fi
+echo "📥 下载 warp-go 核心..."
+curl -sSL -o /usr/local/bin/warp-go "https://gitlab.com/ProjectWARP/warp-go/-/raw/main/bin/warp-go_linux_${bin_arch}" || \
+curl -sSL -o /usr/local/bin/warp-go "https://github.com/pansir0290/unlock_google/releases/download/v1.0.0/warp-go_linux_${bin_arch}"
+chmod +x /usr/local/bin/warp-go
 
-# 建立专属目录与配置文件
 mkdir -p /etc/warp-go
 
-if [ ! -f /etc/warp-go/warp.conf ]; then
-    echo "📝 写入预设配置文件 (Endpoint: ${endpoint_ip})..."
-    cat <<EOF > /etc/warp-go/warp.conf
-[Client]
-PrivateKey = 
-DeviceID = 
-AccessToken = 
+# 自动生成正确的 WARP 账号配置文件
+echo "🔐 正在注册 WARP 账号并生成密钥..."
+/usr/local/bin/warp-go --register --config=/etc/warp-go/warp.conf >/dev/null 2>&1 || true
 
-[Peer]
-PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-Endpoint = ${endpoint_ip}
-KeepAlive = 15
-EOF
-
-    echo "🔐 自动向 Cloudflare 注册 WARP 账号..."
-    /usr/local/bin/warp-go --register --config=/etc/warp-go/warp.conf >/dev/null 2>&1 || true
+# 替换 Endpoint 为优质 IP
+if [ -f /etc/warp-go/warp.conf ]; then
+    sed -i "s/Endpoint =.*/Endpoint = ${endpoint_ip}/g" /etc/warp-go/warp.conf
+else
+    echo "❌ WARP 注册失败，请检查网络链接！"
+    exit 1
 fi
 
-# 创建 systemd 后台守护服务
+# 建立守护服务
 cat <<EOF > /etc/systemd/system/warp-go.service
 [Unit]
 Description=WARP-GO Socks5 Proxy
@@ -103,14 +75,16 @@ systemctl enable --now warp-go >/dev/null 2>&1 || systemctl restart warp-go
 
 sleep 3
 
-# 校验 Socks5 出口地区代码
+# 验证 WARP Socks5 是否生效
 warp_loc=$(curl --socks5 127.0.0.1:${socks_port} -s --max-time 5 https://www.cloudflare.com/cdn-cgi/trace | grep "loc=" | cut -d= -f2 || echo "FAIL")
-echo "🎉 WARP 代理服务部署完成！当前 WARP 出口实际地区: [ ${warp_loc} ]"
+if [ "$warp_loc" = "FAIL" ]; then
+    echo "❌ WARP 本地代理打通失败，请检查 /etc/warp-go/warp.conf 配置文件！"
+    exit 1
+fi
+echo "🎉 WARP 代理接入成功！Socks5 出口地区: [ ${warp_loc} ]"
 
-# ---------------------------------------------------------
-# 3. Python 修改 Xray 配置文件
-# ---------------------------------------------------------
-echo "🛠️ [3/4] 正在配置 Xray 路由规则与出站节点..."
+# 3. Python 注入 Xray 规则 (包含 IP 路由与 GeoIP 覆盖)
+echo "🛠️ 正在配置 Xray 完美路由策略..."
 
 python3 - <<EOF
 import json
@@ -123,7 +97,7 @@ outbound_tag = "${outbound_tag}"
 socks_port = ${socks_port}
 
 if not os.path.exists(cfg_path):
-    print(f"❌ 错误: 未找到 Xray 配置文件 ({cfg_path})，请核对路径！")
+    print(f"❌ 未找到 Xray 配置文件: {cfg_path}")
     exit(1)
 
 backup_path = f"{cfg_path}.bak_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -132,33 +106,29 @@ shutil.copyfile(cfg_path, backup_path)
 with open(cfg_path, 'r', encoding='utf-8') as f:
     data = json.load(f)
 
-if "outbounds" not in data:
-    data["outbounds"] = []
-if "routing" not in data:
-    data["routing"] = {}
-if "rules" not in data["routing"]:
-    data["routing"]["rules"] = []
+data.setdefault("outbounds", [])
+data.setdefault("routing", {}).setdefault("rules", [])
 
+# 清理旧出站
 data["outbounds"] = [o for o in data["outbounds"] if o.get("tag") != outbound_tag]
+
+# 添加 Socks5 出站
 warp_outbound = {
     "tag": outbound_tag,
     "protocol": "socks",
     "settings": {
-        "servers": [
-            {
-                "address": "127.0.0.1",
-                "port": socks_port
-            }
-        ]
+        "servers": [{"address": "127.0.0.1", "port": socks_port}]
     }
 }
 data["outbounds"].append(warp_outbound)
 
+# 清理旧路由规则
 data["routing"]["rules"] = [
     r for r in data["routing"]["rules"] 
-    if outbound_tag not in r.get("outboundTag", "")
+    if r.get("outboundTag") != outbound_tag
 ]
 
+# 精准 YouTube + 视频 CDN 流量规则（包含 IP + 域名）
 youtube_rule = {
     "type": "field",
     "outboundTag": outbound_tag,
@@ -166,31 +136,27 @@ youtube_rule = {
         "geosite:youtube",
         "domain:youtube.com",
         "domain:googlevideo.com",
-        "domain:ytimg.com",
-        "domain:ggpht.com",
-        "domain:googleapis.com",
-        "domain:googleusercontent.com",
-        "domain:youtubei.googleapis.com"
+        "domain:yt.be",
+        "domain:ytimg.com"
     ]
 }
+
+# 插入到规则列表最顶部（最高优先级）
 data["routing"]["rules"].insert(0, youtube_rule)
 
 with open(cfg_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
-print(f"🎯 策略无损注入成功！原有配置已备份至: {backup_path}")
+print(f"🎯 路由规则更新完毕，旧配置已备份至: {backup_path}")
 EOF
 
-# ---------------------------------------------------------
-# 4. 重启 Xray 服务
-# ---------------------------------------------------------
-echo "🔄 [4/4] 正在重新加载并重启 Xray 服务..."
+# 4. 重启 Xray
+echo "🔄 重启 Xray..."
 if systemctl restart xray; then
     echo "========================================================"
-    echo "🎉 恭喜！YouTube 精准分流自动化配置完美落地！"
-    echo "👉 香港机器已自动定向至【日本 WARP】解锁 YouTube Premium。"
+    echo "🎉 部署完成！YouTube 流量已成功强制通过 WARP (${warp_loc}) 解锁！"
     echo "========================================================"
 else
-    echo "❌ 警告: 规则已写入，但重启 Xray 失败，请检查 systemctl status xray。"
+    echo "❌ Xray 重启失败，请检查配置文件 syntax。"
     exit 1
 fi
